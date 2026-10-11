@@ -122,12 +122,27 @@
   input[type=range]:disabled { opacity: .35; }
   .range-ends { display: flex; justify-content: space-between; font-size: 13px; opacity: .65; }
   .row.off { opacity: .45; }
+
+  .hud[hidden] { display: none; }
+  .prog { position: absolute; left: 18px; right: 18px; top: 6px; height: 6px; border-radius: 99px; background: rgba(237,230,255,.16); overflow: hidden; pointer-events: none; }
+  .prog i { display: block; height: 100%; width: 0; border-radius: 99px; background: var(--glow); box-shadow: 0 0 10px rgba(217,242,107,.7); transition: width .2s linear; }
+  .banner { position: absolute; left: 0; right: 0; top: 30%; text-align: center; padding: 0 24px; pointer-events: none; opacity: 0; transform: translateY(8px); transition: opacity .35s, transform .35s; }
+  .banner.on { opacity: 1; transform: none; }
+  .banner b { display: block; font-size: 38px; font-weight: 800; letter-spacing: -0.02em; color: var(--glow); text-shadow: 0 0 24px rgba(217,242,107,.5); }
+  .banner span { font-size: 18px; opacity: .92; }
+  .lvlsel { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 18px; }
+  .lvlname { min-width: 160px; display: flex; flex-direction: column; }
+  .lvlname b { font-size: 24px; font-weight: 800; }
+  .lvlname span { font-size: 15px; opacity: .8; }
+  button.step { width: 44px; height: 44px; padding: 0; font-size: 26px; line-height: 1; background: rgba(237,230,255,.16); color: var(--mist); box-shadow: none; }
+  button.step:disabled { opacity: .25; cursor: default; }
 </style>
 </head>
 <body>
 <canvas id="c" aria-label="Glimmer game"></canvas>
 
 <div class="hud" id="hud" hidden>
+  <div class="prog"><i id="progFill"></i></div>
   <div>
     <div><span class="score" id="score">0</span><span class="combo" id="combo">x2</span></div>
     <div class="best" id="best"></div>
@@ -136,12 +151,15 @@
   <div class="lives" id="lives" aria-label="Lives"></div>
 </div>
 
+<div class="banner" id="banner"></div>
+
 <div class="overlay" id="menu">
   <div class="panel">
     <h1>Glimmer</h1>
-    <p>Touch and drag anywhere to steer through the marsh at dusk.</p>
+    <p>Fly through the marsh and reach the glow at the end of each level.</p>
     <div class="legend"><span><i class="dot"></i>Catch</span><span><i class="thorn"></i>Dodge</span></div>
     <div class="stack">
+      <div class="lvlsel"><button class="step" id="lvlPrev" aria-label="Previous level">&#8249;</button><div class="lvlname"><b id="lvlNum">Level 1</b><span id="lvlDest"></span></div><button class="step" id="lvlNext" aria-label="Next level">&#8250;</button></div>
       <button id="start">Play</button>
       <button class="ghost" id="openShop">Avatars</button>
       <button class="ghost" id="openSettings">Settings</button>
@@ -154,10 +172,21 @@
 <div class="overlay" id="over" hidden>
   <div class="panel">
     <h1 style="font-size:44px">Lights out</h1>
+    <div class="note" id="overLevel" style="margin-bottom:6px"></div>
     <div class="big" id="final">0</div>
     <div class="note" id="finalNote"></div>
     <div class="note" id="earned" style="margin-top:-12px"></div>
     <div class="stack"><button id="again">Fly again</button><button class="ghost" id="openShop2">Avatars</button><button class="ghost" id="toMenu">Menu</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="complete" hidden>
+  <div class="panel">
+    <h1 style="font-size:44px" id="cTitle">Level clear!</h1>
+    <div class="note" id="cDest"></div>
+    <div class="big" id="cScore">0</div>
+    <div class="note" id="cCoins"></div>
+    <div class="stack"><button id="nextLevel">Next level</button><button class="ghost" id="cMenu">Menu</button></div>
   </div>
 </div>
 
@@ -226,6 +255,9 @@
   var pauseBtn = document.getElementById('pauseBtn');
   var settingsEl = document.getElementById('settings');
   var menuBestEl = document.getElementById('menuBest');
+  var completeEl = document.getElementById('complete');
+  var progressEl = document.getElementById('progFill');
+  var bannerEl = document.getElementById('banner');
 
   var COLORS = { dusk: '#241640', marsh: '#1F5C63', glow: '#D9F26B', ember: '#FF7A6B', mist: '#EDE6FF' };
 
@@ -236,6 +268,8 @@
 
   var player, hazards, orbs, particles, trail, stars;
   var runCoins = 0;
+  var level = 1, maxLevel = 1, P = null, goal = null, wind = { t: 0, next: 6, dir: 1 };
+  try { maxLevel = Math.max(1, parseInt(localStorage.getItem('glimmer-maxlevel') || '1', 10) || 1); level = maxLevel; } catch (e) {}
   var score, lives, t, streak, spawnT, inv, shake, lastShownScore, last;
   var keys = {};
   var JOY_R = 52;
@@ -473,6 +507,11 @@
     tone(523.25, 0.15, 'sine', 0.18, 0, 0.1);
     tone(659.25, 0.28, 'sine', 0.2, 0, 0.2);
   }
+  function sfxWin() {
+    var seq = [523.25, 659.25, 783.99, 1046.5, 1318.5];
+    for (var i = 0; i < seq.length; i++) tone(seq[i], 0.45, 'triangle', 0.2, 0, i * 0.12);
+    tone(1046.5, 0.9, 'sine', 0.12, 0, 0.6);
+  }
   function chirp() {
     for (var i = 0; i < 3; i++) tone(4100 + Math.random() * 300, 0.045, 'sine', 0.025, 0, i * 0.075);
   }
@@ -550,16 +589,19 @@
     score = 0; lives = 3; t = 0; streak = 0; spawnT = 0.4; inv = 0; shake = 0; lastShownScore = -1;
     buildLives(); updateLives();
     showScore(true);
-    bestEl.textContent = best ? 'Best ' + best : '';
+    bestEl.textContent = 'Level ' + level + (best ? ' \u00b7 Best ' + best : '');
     comboEl.classList.remove('on');
     runCoins = 0; runCoinsEl.textContent = '0';
     ctl.active = false;
+    P = lvlParams(level); goal = null; wind.t = 0; wind.next = 5;
+    progressEl.style.width = '0%';
   }
 
   function startGame() {
     initAudio(); sfxStart();
     reset();
-    menu.hidden = true; over.hidden = true; hud.hidden = false; pauseBtn.hidden = false;
+    showBanner('Level ' + level, 'Fly to the ' + levelInfo(level).name, 2600);
+    menu.hidden = true; over.hidden = true; completeEl.hidden = true; hud.hidden = false; pauseBtn.hidden = false;
     state = 'play';
     last = performance.now();
   }
@@ -571,6 +613,7 @@
     var isBest = s > best;
     if (isBest) { best = s; try { localStorage.setItem('glimmer-best', String(best)); } catch (e) {} }
     finalEl.textContent = s;
+    document.getElementById('overLevel').textContent = 'Level ' + level + ' \u00b7 ' + levelInfo(level).name;
     wallet.coins += runCoins; saveWallet(); refreshCoinTotals();
     earnedEl.textContent = runCoins ? '+' + runCoins + (runCoins === 1 ? ' coin' : ' coins') + ' earned' : 'No coins this time';
     finalNote.textContent = isBest ? 'New best! Beat it next time.' : 'Best: ' + best;
@@ -592,14 +635,87 @@
     }
   }
 
+  var LEVELS = [
+    { name: 'Lily Pond', col: '#FF9EC4' },
+    { name: 'Old Lantern', col: '#FFC46B' },
+    { name: 'Willow Hollow', col: '#9EE6A8' },
+    { name: 'Mossy Bridge', col: '#8EC9FF' },
+    { name: 'Cattail Grove', col: '#E8B07A' },
+    { name: 'Moon Pool', col: '#C9B8FF' },
+    { name: 'Reed Castle', col: '#7FE3D2' },
+    { name: 'Fern Canyon', col: '#B6F07A' },
+    { name: 'Starlit Meadow', col: '#FFE27A' },
+    { name: 'Firefly Home', col: '#FFFFFF' }
+  ];
+  function levelInfo(L) {
+    var b = LEVELS[(L - 1) % LEVELS.length], round = Math.floor((L - 1) / LEVELS.length);
+    return { name: b.name + (round ? ' ' + (round + 1) : ''), col: b.col };
+  }
+  function lvlParams(L) {
+    return {
+      dur: Math.min(60, 15 + L * 3),
+      speed: Math.min(420, 100 + L * 16),
+      gap: Math.max(0.24, 0.95 - L * 0.05),
+      orbP: Math.max(0.18, 0.32 - L * 0.01),
+      dart: L >= 3 ? Math.min(0.35, 0.08 * (L - 2)) : 0,
+      wobble: Math.min(80, 10 + L * 10),
+      wind: L >= 5 ? Math.min(220, 40 * (L - 3)) : 0,
+      goalR: Math.max(26, 40 - L * 1.5),
+      goalSway: L >= 4 ? Math.min(120, 18 * (L - 2)) : 0
+    };
+  }
+
+  var bannerTimer = null;
+  function showBanner(title, sub, ms) {
+    bannerEl.innerHTML = '<b></b><span></span>';
+    bannerEl.firstChild.textContent = title;
+    bannerEl.lastChild.textContent = sub;
+    bannerEl.classList.add('on');
+    clearTimeout(bannerTimer);
+    bannerTimer = setTimeout(function () { bannerEl.classList.remove('on'); }, ms || 2200);
+  }
+
+  function refreshLevelSel() {
+    document.getElementById('lvlNum').textContent = 'Level ' + level;
+    document.getElementById('lvlDest').textContent = levelInfo(level).name;
+    document.getElementById('lvlPrev').disabled = level <= 1;
+    document.getElementById('lvlNext').disabled = level >= maxLevel;
+  }
+
   function spawn() {
     var x = 24 * S + Math.random() * (W - 48 * S);
-    if (Math.random() < 0.3) {
-      orbs.push({ x: x, y: -20, vy: (90 + t * 2) * S, r: 11 * S, ph: Math.random() * 6 });
+    if (Math.random() < P.orbP) {
+      orbs.push({ x: x, y: -20, vy: (85 + level * 5) * S, r: 11 * S, ph: Math.random() * 6 });
+    } else if (Math.random() < P.dart) {
+      var dr = 9 * S;
+      hazards.push({ kind: 'dart', x: x, y: -dr * 3, vy: P.speed * 1.8 * S * (0.9 + Math.random() * 0.3), r: dr, rot: 0, vr: 0, amp: 0, fr: 0, ph: 0, warn: 0.7 });
     } else {
       var r = (12 + Math.random() * 12) * S;
-      hazards.push({ x: x, y: -r * 2, vy: Math.min(110 + t * 4.5, 380) * S * (0.85 + Math.random() * 0.4), r: r, rot: 0, vr: (Math.random() - 0.5) * 3, amp: Math.random() * 40 * S, fr: 1 + Math.random() * 2, ph: Math.random() * 6 });
+      hazards.push({ x: x, y: -r * 2, vy: P.speed * S * (0.85 + Math.random() * 0.4) * (1 + Math.min(1, t / P.dur) * 0.25), r: r, rot: 0, vr: (Math.random() - 0.5) * 3, amp: Math.random() * P.wobble * S, fr: 1 + Math.random() * 2, ph: Math.random() * 6 });
     }
+  }
+
+  function completeLevel() {
+    state = 'complete';
+    var done = level, info = levelInfo(done), bonusCoins = 3 + done;
+    score += 50 * done;
+    var s = Math.floor(score);
+    if (s > best) { best = s; try { localStorage.setItem('glimmer-best', String(best)); } catch (e) {} }
+    var gained = runCoins + bonusCoins;
+    wallet.coins += gained; saveWallet(); refreshCoinTotals();
+    if (done >= maxLevel) { maxLevel = done + 1; try { localStorage.setItem('glimmer-maxlevel', String(maxLevel)); } catch (e) {} }
+    level = Math.min(done + 1, maxLevel);
+    burst(goal.x, goal.y, info.col, 40, 260);
+    burst(goal.x, goal.y, COLORS.glow, 24, 200);
+    sfxWin();
+    if (navigator.vibrate) { try { navigator.vibrate([40, 40, 80]); } catch (e) {} }
+    document.getElementById('cTitle').textContent = 'Level ' + done + ' clear!';
+    document.getElementById('cDest').textContent = 'You reached the ' + info.name;
+    document.getElementById('cScore').textContent = s;
+    document.getElementById('cCoins').textContent = '+' + gained + ' coins (' + bonusCoins + ' level bonus)';
+    hud.hidden = true; pauseBtn.hidden = true;
+    refreshMenuBest();
+    setTimeout(function () { if (state === 'complete') completeEl.hidden = false; }, 900);
   }
 
   function hit() {
@@ -629,6 +745,15 @@
     player.tx = Math.max(player.r, Math.min(W - player.r, player.tx));
     player.ty = Math.max(player.r + 60, Math.min(H - player.r - 10, player.ty));
 
+    if (P.wind) {
+      wind.next -= dt;
+      if (wind.t <= 0 && wind.next <= 0) { wind.t = 1.6; wind.dir = Math.random() < 0.5 ? -1 : 1; wind.next = 5 + Math.random() * 4; }
+      if (wind.t > 0) {
+        wind.t -= dt;
+        var push = wind.dir * P.wind * S * dt * Math.sin(Math.PI * Math.max(0, 1 - wind.t / 1.6));
+        player.tx += push; player.x += push;
+      }
+    }
     var k = Math.min(1, dt * 13);
     player.x += (player.tx - player.x) * k;
     player.y += (player.ty - player.y) * k;
@@ -637,13 +762,14 @@
     for (var i = trail.length - 1; i >= 0; i--) { trail[i].a -= dt * 2.4; if (trail[i].a <= 0) trail.splice(i, 1); }
 
     spawnT -= dt;
-    if (spawnT <= 0) { spawn(); spawnT = Math.max(0.26, 0.85 - t * 0.011) * (0.7 + Math.random() * 0.6); }
+    if (spawnT <= 0) { spawn(); spawnT = P.gap * (goal ? 1.3 : 1) * (0.7 + Math.random() * 0.6); }
 
     if (inv > 0) inv -= dt;
     if (shake > 0) shake -= dt;
 
     for (i = hazards.length - 1; i >= 0; i--) {
       var h = hazards[i];
+      if (h.warn > 0) { h.warn -= dt; continue; }
       h.y += h.vy * dt;
       h.x += Math.sin(h.ph + t * h.fr) * h.amp * dt;
       h.rot += h.vr * dt;
@@ -677,6 +803,21 @@
       if (p.life <= 0) particles.splice(i, 1);
     }
 
+    // level progress and goal
+    if (!goal) {
+      progressEl.style.width = Math.min(100, t / P.dur * 100) + '%';
+      if (t >= P.dur) {
+        goal = { bx: W * (0.3 + Math.random() * 0.4), x: 0, y: -60 * S, ty: Math.max(120 * S, H * 0.17), r: P.goalR * S };
+        goal.x = goal.bx;
+        progressEl.style.width = '100%';
+        showBanner('Almost there!', 'Reach the glow at the top', 2600);
+      }
+    } else {
+      goal.y = Math.min(goal.ty, goal.y + 70 * S * dt);
+      goal.x = Math.max(W * 0.15, Math.min(W * 0.85, goal.bx + Math.sin(t * 0.9) * P.goalSway * S));
+      var gx = goal.x - player.x, gy = goal.y - player.y, gr = goal.r + player.r * 0.5;
+      if (gx * gx + gy * gy < gr * gr) { completeLevel(); return; }
+    }
     showScore(false);
   }
 
@@ -758,16 +899,64 @@
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
 
+    // destination glow on the horizon
+    if (!goal && P) {
+      var prg = Math.min(1, t / P.dur);
+      ctx.globalCompositeOperation = 'lighter';
+      glowCircle(W * 0.5, -20, W * (0.25 + 0.6 * prg), levelInfo(level).col, 0.12 + 0.35 * prg);
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    // wind streaks
+    if (wind.t > 0) {
+      var env = Math.sin(Math.PI * Math.max(0, 1 - wind.t / 1.6));
+      ctx.strokeStyle = 'rgba(237,230,255,' + (0.35 * env) + ')'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+      for (var wi = 0; wi < 9; wi++) {
+        var wy = (wi * 97 + now * 120) % H, wx = (now * 700 * wind.dir + wi * 173) % W;
+        if (wx < 0) wx += W;
+        ctx.beginPath(); ctx.moveTo(wx, wy); ctx.lineTo(wx + wind.dir * 46 * S, wy); ctx.stroke();
+      }
+    }
+
     for (i = 0; i < hazards.length; i++) {
       var h = hazards[i];
+      if (h.kind === 'dart') {
+        if (h.warn > 0) {
+          ctx.globalAlpha = 0.5 + 0.5 * Math.sin(now * 20);
+          ctx.fillStyle = COLORS.ember;
+          ctx.beginPath(); ctx.moveTo(h.x, 140 * S); ctx.lineTo(h.x - 11 * S, 114 * S); ctx.lineTo(h.x + 11 * S, 114 * S); ctx.closePath(); ctx.fill();
+          ctx.globalAlpha = 1;
+          continue;
+        }
+        ctx.fillStyle = COLORS.ember;
+        ctx.beginPath(); ctx.moveTo(h.x, h.y + h.r * 2.6); ctx.lineTo(h.x + h.r, h.y - h.r * 1.2); ctx.lineTo(h.x, h.y - h.r * 0.6); ctx.lineTo(h.x - h.r, h.y - h.r * 1.2); ctx.closePath(); ctx.fill();
+        continue;
+      }
       ctx.fillStyle = COLORS.ember;
       drawStar(h.x, h.y, h.r, h.rot); ctx.fill();
       ctx.fillStyle = '#7a2a3a';
       ctx.beginPath(); ctx.arc(h.x, h.y, h.r * 0.28, 0, Math.PI * 2); ctx.fill();
     }
 
+    // destination
+    if (goal) {
+      var gcol = levelInfo(level).col, gp = 1 + Math.sin(now * 3) * 0.06;
+      ctx.globalCompositeOperation = 'lighter';
+      glowCircle(goal.x, goal.y, goal.r * 3.6 * gp, gcol, 0.6);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = '#2A7F86';
+      ctx.beginPath(); ctx.ellipse(goal.x, goal.y + goal.r * 0.45, goal.r * 1.15, goal.r * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = gcol;
+      for (var pi2 = -2; pi2 <= 2; pi2++) {
+        ctx.save(); ctx.translate(goal.x, goal.y + goal.r * 0.3); ctx.rotate(pi2 * 0.5);
+        ctx.beginPath(); ctx.ellipse(0, -goal.r * 0.5, goal.r * 0.3, goal.r * 0.7, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+      }
+      ctx.fillStyle = '#FFF6C8';
+      ctx.beginPath(); ctx.arc(goal.x, goal.y, goal.r * 0.22, 0, Math.PI * 2); ctx.fill();
+    }
+
     // avatar
-    if (state === 'play' && !(inv > 0 && Math.floor(inv * 14) % 2 === 0)) {
+    if ((state === 'play' || state === 'complete') && !(inv > 0 && Math.floor(inv * 14) % 2 === 0)) {
       drawAvatar(ctx, wallet.sel, player.x, player.y, player.r, now, 5);
     }
     ctx.restore();
@@ -795,7 +984,7 @@
     var dt = Math.min(0.033, (now - (last || now)) / 1000);
     last = now;
     if (state === 'play') update(dt);
-    else if (state === 'over' && particles) {
+    else if ((state === 'over' || state === 'complete') && particles) {
       for (var i = particles.length - 1; i >= 0; i--) {
         var p = particles[i]; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
         if (p.life <= 0) particles.splice(i, 1);
@@ -877,7 +1066,7 @@
     settingsEl.hidden = true;
     if (settingsFrom === 'pause') pauseEl.hidden = false; else menu.hidden = false;
   }
-  function refreshMenuBest() { menuBestEl.textContent = best ? 'Best score ' + best : ''; }
+  function refreshMenuBest() { menuBestEl.textContent = best ? 'Best score ' + best : ''; refreshLevelSel(); }
   function pauseGame() {
     if (state !== 'play') return;
     state = 'paused'; ctl.active = false; pauseEl.hidden = false;
@@ -898,6 +1087,10 @@
   document.getElementById('pauseBtn').addEventListener('click', pauseGame);
   document.getElementById('resume').addEventListener('click', resumeGame);
   document.getElementById('quit').addEventListener('click', quitToMenu);
+  document.getElementById('lvlPrev').addEventListener('click', function () { if (level > 1) { level--; refreshLevelSel(); } });
+  document.getElementById('lvlNext').addEventListener('click', function () { if (level < maxLevel) { level++; refreshLevelSel(); } });
+  document.getElementById('nextLevel').addEventListener('click', startGame);
+  document.getElementById('cMenu').addEventListener('click', function () { completeEl.hidden = true; menu.hidden = false; refreshMenuBest(); });
   document.getElementById('toMenu').addEventListener('click', function () { over.hidden = true; menu.hidden = false; refreshMenuBest(); });
   document.getElementById('ctlSeg').addEventListener('click', function (e) {
     var m = e.target.getAttribute && e.target.getAttribute('data-mode');
